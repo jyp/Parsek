@@ -11,37 +11,13 @@
 -- This module provides the /Parsek/ library developed by Koen Claessen in his
 -- functional pearl article /Parallel Parsing Processes/, Journal of Functional
 -- Programming, 14(6), 741&#150;757, Cambridge University Press, 2004:
---
--- <http://www.cs.chalmers.se/~koen/pubs/entry-jfp04-parser.html>
---
-------------------------------------------------------------------
--- Parsek, a Parser Combinator Library                          --
--- Copyright (c) 2003 Koen Claessen                             --
--- koen@cs.chalmers.se                                          --
---                                                              --
--- This file is part of Parsek.                                 --
---                                                              --
--- Parsek is free software; you can redistribute it and/or      --
--- modify it under the terms of the GNU General Public License  --
--- as published by the Free Software Foundation; either version --
--- 2 of the License, or (at your option) any later version.     --
---                                                              --
--- Parsek is distributed in the hope that it will be useful,    --
--- but WITHOUT ANY WARRANTY; without even the implied warranty  --
--- of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See  --
--- the GNU General Public License for more details.             --
---                                                              --
--- You should have received a copy of the GNU General Public    --
--- License along with Parsek; if not, write to the Free         --
--- Software Foundation, Inc., 59 Temple Place, Suite 330,       --
--- Boston, MA 02111-1307 USA.                                   --
-------------------------------------------------------------------
 
 module Text.ParserCombinators.Parsek
   -- basic parser type
   ( Parser         -- :: * -> * -> *; Functor, Monad, MonadPlus
   , Expect         -- :: *; = [String]
   , Unexpect       -- :: *; = [String]
+  , SourcePos(..)
 
   -- parsers
   , satisfy        -- :: Show s => (s -> Bool) -> Parser s s
@@ -132,7 +108,7 @@ infixr 3 <<|>
 -------------------------------------------------------------------------
 -- type Parser
 
-newtype Parser s a
+newtype Parser st s a
   = Parser (forall res . (a -> Expect -> P s res) -> Expect -> P s res)
 
 -- type P; parsing processes
@@ -360,13 +336,13 @@ type ParseMethod s a r
 type ParseResult e r
   = Either (e, Expect, Unexpect) r
 
-parseFromFile :: Parser Char a -> (ParseMethod Char a r) -> FilePath -> IO (ParseResult Loc r)
+parseFromFile :: Parser Char a -> ParseMethod Char a r -> FilePath -> IO (ParseResult SourcePos r)
 parseFromFile p method file =
   do s <- readFile file
-     return (parseString p method s)
+     return (parseString p method file s)
 
-parseString :: Parser Char a -> ParseMethod Char a r -> String -> ParseResult Loc r
-parseString p method xs = parse p updLoc initLoc method xs
+parseString :: Parser Char a -> ParseMethod Char a r -> FilePath -> String -> ParseResult SourcePos r
+parseString p method path xs = parse p updLoc (initLoc path) method xs
 
 parse :: Parser s a -> (s -> e -> e) -> e -> ParseMethod s a r -> [s] -> ParseResult e r
 parse (Parser f) g e method xs =
@@ -532,13 +508,13 @@ failEof e exp err = Left (e, exp, err ++ ["end of file"])
 -------------
 -- Locations
 
-data Loc = Loc {locLine :: !Int, locCol :: !Int}
+data SourcePos = Loc {sourceName :: !FilePath, sourceLine :: !Int, sourceCol :: !Int}
 
-updLoc '\n' (Loc l c) = Loc (l+1) 0
-updLoc '\t' (Loc l c) = Loc l ((c+8) .&. complement 7)
-updLoc _    (Loc l c) = Loc l (c+1)
+updLoc '\n' (Loc f l c) = Loc f (l+1) 0
+updLoc '\t' (Loc f l c) = Loc f l ((c+8) .&. complement 7)
+updLoc _    (Loc f l c) = Loc f l (c+1)
 
-initLoc = Loc 1 0
+initLoc p = Loc p 1 0
 
 
 
