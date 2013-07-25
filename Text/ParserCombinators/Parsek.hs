@@ -1,6 +1,7 @@
-{-# LANGUAGE RankNTypes, BangPatterns #-}
-
--- Module      :  Text.ParserCombinators.Parsek
+{-# LANGUAGE RankNTypes, MultiParamTypeClasses, TypeFamilies, FlexibleContexts #-}
+-- |
+--
+-- Module      :  Parsek
 -- Copyright   :  Koen Claessen 2003
 -- License     :  GPL
 --
@@ -11,17 +12,21 @@
 -- This module provides the /Parsek/ library developed by Koen Claessen in his
 -- functional pearl article /Parallel Parsing Processes/, Journal of Functional
 -- Programming, 14(6), 741&#150;757, Cambridge University Press, 2004:
+--
+-- <http://www.cs.chalmers.se/~koen/pubs/entry-jfp04-parser.html>
+--
+-- <http://www.cs.chalmers.se/Cs/Grundutb/Kurser/afp/>
+--
+-- <http://www.cs.chalmers.se/Cs/Grundutb/Kurser/afp/code/week3/Parsek.hs>
 
 module Text.ParserCombinators.Parsek
   -- basic parser type
   ( Parser         -- :: * -> * -> *; Functor, Monad, MonadPlus
   , Expect         -- :: *; = [String]
   , Unexpect       -- :: *; = [String]
-  , SourcePos(..)
 
+  , IsParser (..)
   -- parsers
-  , satisfy        -- :: Show s => (s -> Bool) -> Parser s s
-  , look           -- :: Parser s [s]
   , succeeds       -- :: Parser s a -> Parser s (Maybe a)
   , string         -- :: (Eq s, Show s) => [s] -> Parser s [s]
 
@@ -48,9 +53,7 @@ module Text.ParserCombinators.Parsek
   , label          -- :: String -> Parser s a -> Parser s a
   , (<?>)          -- :: Parser s a -> String -> Parser s a
   , pzero          -- :: Parser s a
-  , (<|>)          -- :: Parser s a -> Parser s a -> Parser s a
   , (<<|>)         -- :: Parser s a -> Parser s a -> Parser s a
-  , try            -- :: Parser s a -> Parser s a; = id
   , choice         -- :: [Parser s a] -> Parser s a
   , option         -- :: a -> Parser s a -> Parser s a
   , between        -- :: Parser s open -> Parser s close -> Parser s a -> Parser s a
@@ -63,53 +66,61 @@ module Text.ParserCombinators.Parsek
 
   , skipMany1      -- :: Parser s a -> Parser s ()
   , skipMany       -- :: Parser s a -> Parser s ()
-  , many1          -- :: Parser s a -> Parser s [a]
-  , many           -- :: Parser s a -> Parser s [a]
   , sepBy1         -- :: Parser s a -> Parser s sep -> Parser s [a]
   , sepBy          -- :: Parser s a -> Parser s sep -> Parser s [a]
 
   -- parsing & parse methods
-  , ParseMethod   
+  , ParseMethod    -- :: * -> * -> * -> * -> *
   , ParseResult    -- :: * -> * -> *; = Either (e, Expect, Unexpect) r
   , parseFromFile  -- :: Parser Char a -> ParseMethod Char a e r -> FilePath -> IO (ParseResult e r)
   , parse          -- :: Parser s a -> ParseMethod s a e r -> [s] -> ParseResult e r
 
-  , shortestResult             
-  , longestResult              
-  , longestResults             
-  , allResults                 
-  , allResultsStaged           
-  , completeResults            
+  , shortestResult             -- :: ParseMethod s a (Maybe s) a
+  , longestResult              -- :: ParseMethod s a (Maybe s) a
+  , longestResults             -- :: ParseMethod s a (Maybe s) [a]
+  , allResults                 -- :: ParseMethod s a (Maybe s) [a]
+  , allResultsStaged           -- :: ParseMethod s a (Maybe s) [[a]]
+  , completeResults            -- :: ParseMethod s a (Maybe s) [a]
 
-  , shortestResultWithLeftover 
-  , longestResultWithLeftover  
-  , longestResultsWithLeftover 
-  , allResultsWithLeftover     
+  , shortestResultWithLeftover -- :: ParseMethod s a (Maybe s) (a,[s])
+  , longestResultWithLeftover  -- :: ParseMethod s a (Maybe s) (a,[s])
+  , longestResultsWithLeftover -- :: ParseMethod s a (Maybe s) ([a],[s])
+  , allResultsWithLeftover     -- :: ParseMethod s a (Maybe s) [(a,[s])]
+  
+  , module Control.Applicative
+  , module Control.Monad
+  -- , completeResultsWithLine    -- :: ParseMethod Char a Int [a]
   )
  where
 
 import Control.Applicative
 import Control.Monad
   ( MonadPlus(..)
+  , forM_
   , guard
   , ap
   )
 
 import Data.List
   ( union
+  , intersperse
   )
 
 import Data.Char
-import Data.Bits
 
 infix  2 <?>
 infixr 3 <<|>
 
+class (Monad p, Applicative p, Alternative p, Show (SymbolOf p)) => IsParser p where
+  type SymbolOf p 
+  satisfy :: (SymbolOf p -> Bool) -> p (SymbolOf p)
+  look :: p [SymbolOf p]
+
 -------------------------------------------------------------------------
 -- type Parser
 
-newtype Parser st s a
-  = Parser (forall res . (a -> Expect -> P s res) -> Expect -> P s res)
+newtype Parser s a
+  = Parser (forall res. (a -> Expect -> P s res) -> Expect -> P s res)
 
 -- type P; parsing processes
 
@@ -121,9 +132,11 @@ data P s res
 
 -- type Expect, Unexpect
 
-type Expect = [String]
+type Expect
+  = [String]
 
-type Unexpect = [String]
+type Unexpect
+  = [String]
 
 -------------------------------------------------------------------------
 -- instances: Functor, Monad, MonadPlus
@@ -140,11 +153,11 @@ instance Monad (Parser s) where
     Parser (\fut -> f (\a -> let Parser g = k a in g fut))
 
   fail s =
-    Parser (\_fut exp -> Fail exp [s])
+    Parser (\fut exp -> Fail exp [s])
 
 instance MonadPlus (Parser s) where
   mzero =
-    Parser (\_fut exp -> Fail exp [])
+    Parser (\fut exp -> Fail exp [])
 
   mplus (Parser f) (Parser g) =
     Parser (\fut exp -> f fut exp `plus` g fut exp)
@@ -154,9 +167,8 @@ instance Applicative (Parser s) where
   (<*>) = ap
 
 instance Alternative (Parser s) where
-  empty = mzero
   (<|>) = mplus
-   
+  empty = mzero
 
 plus :: P s res -> P s res -> P s res
 Symbol fut1    `plus` Symbol fut2    = Symbol (\s -> fut1 s `plus` fut2 s)
@@ -172,19 +184,23 @@ _              `plus` q@(Symbol _)   = q
 -------------------------------------------------------------------------
 -- primitive parsers
 
-anySymbol :: Parser s s
-anySymbol =
-  Parser (\fut exp -> Symbol (\c ->
-    fut c []
-  ))
+anySymbol :: IsParser p => p (SymbolOf p)
+anySymbol = satisfy (const True)
 
-satisfy :: Show s => (s -> Bool) -> Parser s s
-satisfy pred =
-  Parser (\fut exp -> Symbol (\c ->
-    if pred c
-      then fut c []
-      else Fail exp [show [c]]
-  ))
+instance Show s => IsParser (Parser s) where
+  type SymbolOf (Parser s) = s
+  satisfy pred =
+    Parser (\fut exp -> Symbol (\c ->
+      if pred c
+        then fut c []
+        else Fail exp [show [c]] -- FIXME: this is highly doubtful
+    ))
+  look =
+    Parser (\fut exp ->
+      Look (\s -> fut s exp)
+    )
+
+string s = forM_ s char <?> show s
 
 label :: Parser s a -> String -> Parser s a
 label (Parser f) s =
@@ -194,11 +210,6 @@ label (Parser f) s =
       else f fut exp
   )
 
-look :: Parser s [s]
-look =
-  Parser (\fut exp ->
-    Look (\s -> fut s exp)
-  )
 
 succeeds :: Parser s a -> Parser s (Maybe a)
 succeeds (Parser f) =
@@ -220,20 +231,6 @@ succeeds (Parser f) =
 
 -- specialized
 
-string :: (Eq s, Show s) => [s] -> Parser s [s]
-string s =
-  Parser (\fut exp ->
-    let inputs []     = fut s []
-        inputs (x:xs) =
-          Symbol (\c ->
-            if c == x
-              then inputs xs
-              else Fail (if null exp then [show s] else exp) [show [c]]
-          )
-
-     in inputs s
-  )
-
 -------------------------------------------------------------------------
 -- derived parsers
 
@@ -252,9 +249,9 @@ letter    = satisfy (isAlpha)     <?> "letter"
 digit     = satisfy (isDigit)     <?> "digit"
 hexDigit  = satisfy (isHexDigit)  <?> "hexadecimal digit"
 octDigit  = satisfy (isOctDigit)  <?> "octal digit"
+anyChar   :: IsParser p => p (SymbolOf p)
 anyChar   = anySymbol
 
-munch :: (s -> Bool) -> Parser s [s]
 munch p =
   do cs <- look
      scan cs
@@ -262,7 +259,6 @@ munch p =
   scan (c:cs) | p c = do anySymbol; as <- scan cs; return (c:as)
   scan _            = do return []
 
-munch1 :: Show s => (s -> Bool) -> Parser s [s]
 munch1 p =
   do c  <- satisfy p
      cs <- munch p
@@ -277,46 +273,33 @@ p <?> s = label p s
 pzero :: Parser s a
 pzero = mzero
 
-(<<|>) :: Parser s a -> Parser s a -> Parser s a
 p <<|> q =
   do ma <- succeeds p
      case ma of
        Nothing -> q
        Just a  -> return a
 
-try :: Parser s a -> Parser s a
-try p = p -- backwards compatibility with Parsec
-
-choice :: [Parser s a] -> Parser s a
 choice ps = foldr (<|>) mzero ps
 
-option :: a -> Parser s a -> Parser s a
 option x p = p <|> return x
 
-between :: Parser s open -> Parser s close -> Parser s a -> Parser s a
+optional p = (do p; return ()) <|> return ()
+
 between open close p = do open; x <- p; close; return x
 
 -- repetition
 
-skipMany1,skipMany :: Parser s a -> Parser s ()
 skipMany1 p = do p; skipMany p
 skipMany  p = let scan = (do p; scan) <|> return () in scan
 
-many1 :: Parser s a -> Parser s [a]
-many1 = some
-
-sepBy1,sepBy :: Parser s a -> Parser s sep -> Parser s [a]
 sepBy  p sep = sepBy1 p sep <|> return []
 sepBy1 p sep = do x <- p; xs <- many (do sep; p); return (x:xs)
 
-count :: Int -> Parser s a -> Parser s [a]
 count n p = sequence (replicate n p)
 
-chainr,chainl :: Parser s a -> Parser s (a -> a -> a) -> a -> Parser s a
 chainr p op x = chainr1 p op <|> return x
 chainl p op x = chainl1 p op <|> return x
 
-chainr1,chainl1 :: Parser s a -> Parser s (a -> a -> a) -> Parser s a
 chainr1 p op = scan
  where
   scan   = do x <- p; rest x
@@ -330,152 +313,151 @@ chainl1 p op = scan
 -------------------------------------------------------------------------
 -- type ParseMethod, ParseResult
 
-type ParseMethod s a r
-  = forall e. P s a -> [s] -> (s -> e -> e) -> e -> ParseResult e r
+type ParseMethod s a e r
+  = P s a -> [s] -> ParseResult e r
 
 type ParseResult e r
   = Either (e, Expect, Unexpect) r
 
-parseFromFile :: Parser Char a -> ParseMethod Char a r -> FilePath -> IO (ParseResult SourcePos r)
+-- parse functions
+
+parseFromFile :: Parser Char a -> ParseMethod Char a e r -> FilePath -> IO (ParseResult e r)
 parseFromFile p method file =
   do s <- readFile file
-     return (parseString p method file s)
+     return (parse p method s)
 
-parseString :: Parser Char a -> ParseMethod Char a r -> FilePath -> String -> ParseResult SourcePos r
-parseString p method path xs = parse p updLoc (initLoc path) method xs
-
-parse :: Parser s a -> (s -> e -> e) -> e -> ParseMethod s a r -> [s] -> ParseResult e r
-parse (Parser f) g e method xs =
-  case method (f (\a exp -> Result a (Fail exp [])) []) xs g e of
+parse :: Parser s a -> ParseMethod s a e r -> [s] -> ParseResult e r
+parse (Parser f) method xs =
+  case method (f (\a exp -> Result a (Fail exp [])) []) xs of
     Left (err, exp, unexp) -> Left (err, [ s | s@(_:_) <- exp ], unexp)
     Right x                -> Right x
 
 -- parse methods
 
-shortestResult :: ParseMethod s a a
-shortestResult p xs g e0 = scan e0 p xs
+shortestResult :: ParseMethod s a (Maybe s) a
+shortestResult p xs = scan p xs
  where
-  scan !e (Symbol sym)   (x:xs) = scan (g x e) (sym x) xs
-  scan e (Symbol _)     []     = scan e (Fail [] []) []
-  scan e (Result res _) _      = Right res
-  scan e (Fail exp err) (x:xs) = failSym e exp err
-  scan e (Fail exp err) []     = failEof e exp err
-  scan e (Look f)       xs     = scan e (f xs) xs
+  scan (Symbol sym)   (x:xs) = scan (sym x) xs
+  scan (Symbol _)     []     = scan (Fail [] []) []
+  scan (Result res _) _      = Right res
+  scan (Fail exp err) (x:xs) = failSym x exp err
+  scan (Fail exp err) []     = failEof exp err
+  scan (Look f)       xs     = scan (f xs) xs
 
-longestResult :: ParseMethod s a a
-longestResult p xs g e0 = scan e0 p Nothing xs
+longestResult :: ParseMethod s a (Maybe s) a
+longestResult p xs = scan p Nothing xs
  where
-  scan !e (Symbol sym)   mres       (x:xs) = scan (g x e) (sym x) mres xs
-  scan e (Symbol _)     mres       []     = scan e (Fail [] []) mres []
-  scan e (Result res p) _          xs     = scan e p (Just res) xs
-  scan e (Fail exp err) Nothing    (x:xs) = failSym e exp err
-  scan e (Fail exp err) Nothing    []     = failEof e exp err
-  scan e (Fail _ _)     (Just res) _      = Right res
-  scan e (Look f)       mres       xs     = scan e (f xs) mres xs
+  scan (Symbol sym)   mres       (x:xs) = scan (sym x) mres xs
+  scan (Symbol _)     mres       []     = scan (Fail [] []) mres []
+  scan (Result res p) _          xs     = scan p (Just res) xs
+  scan (Fail exp err) Nothing    (x:xs) = failSym x exp err
+  scan (Fail exp err) Nothing    []     = failEof exp err
+  scan (Fail _ _)     (Just res) _      = Right res
+  scan (Look f)       mres       xs     = scan (f xs) mres xs
 
-longestResults :: ParseMethod s a [a]
-longestResults p xs g e0 = scan e0 p [] [] xs
+longestResults :: ParseMethod s a (Maybe s) [a]
+longestResults p xs = scan p [] [] xs
  where
-  scan !e (Symbol sym)   []  old (x:xs) = scan (g x e) (sym x) [] old xs
-  scan e (Symbol sym)   new old (x:xs) = scan e (sym x) [] new xs
-  scan e (Symbol _)     new old []     = scan e (Fail [] []) new old []
-  scan e (Result res p) new old xs     = scan e p (res:new) [] xs
-  scan e (Fail exp err) []  []  (x:xs) = failSym e exp err
-  scan e (Fail exp err) []  []  []     = failEof e exp err
-  scan e (Fail _ _)     []  old _      = Right old
-  scan e (Fail _ _)     new _   _      = Right new
-  scan e (Look f)       new old xs     = scan e (f xs) new old xs
+  scan (Symbol sym)   []  old (x:xs) = scan (sym x) [] old xs
+  scan (Symbol sym)   new old (x:xs) = scan (sym x) [] new xs
+  scan (Symbol _)     new old []     = scan (Fail [] []) new old []
+  scan (Result res p) new old xs     = scan p (res:new) [] xs
+  scan (Fail exp err) []  []  (x:xs) = failSym x exp err
+  scan (Fail exp err) []  []  []     = failEof exp err
+  scan (Fail _ _)     []  old _      = Right old
+  scan (Fail _ _)     new _   _      = Right new
+  scan (Look f)       new old xs     = scan (f xs) new old xs
 
-allResultsStaged :: ParseMethod s a [[a]]
-allResultsStaged p xs g e0 = Right (scan e0 p [] xs)
+allResultsStaged :: ParseMethod s a (Maybe s) [[a]]
+allResultsStaged p xs = Right (scan p [] xs)
  where
-  scan !e (Symbol sym)   ys (x:xs) = ys : scan (g x e) (sym x) [] xs
-  scan  e (Symbol _)     ys []     = [ys]
-  scan  e (Result res p) ys xs     = scan e p (res:ys) xs
-  scan  e (Fail _ _)     ys _      = [ys]
-  scan  e (Look f)       ys xs     = scan e (f xs) ys xs
+  scan (Symbol sym)   ys (x:xs) = ys : scan (sym x) [] xs
+  scan (Symbol _)     ys []     = [ys]
+  scan (Result res p) ys xs     = scan p (res:ys) xs
+  scan (Fail _ _)     ys _      = [ys]
+  scan (Look f)       ys xs     = scan (f xs) ys xs
 
-allResults :: ParseMethod s a [a]
-allResults p xs g e0 = scan e0 p xs
+allResults :: ParseMethod s a (Maybe s) [a]
+allResults p xs = scan p xs
  where
-  scan !e (Symbol sym)   (x:xs) = scan (g x e) (sym x) xs
-  scan  e (Symbol _)     []     = scan e (Fail [] []) []
-  scan  e (Result res p) xs     = Right (res : scan' e p xs)
-  scan  e (Fail exp err) (x:xs) = failSym e exp err
-  scan  e (Fail exp err) []     = failEof e exp err
-  scan  e (Look f)       xs     = scan e (f xs) xs
+  scan (Symbol sym)   (x:xs) = scan (sym x) xs
+  scan (Symbol _)     []     = scan (Fail [] []) []
+  scan (Result res p) xs     = Right (res : scan' p xs)
+  scan (Fail exp err) (x:xs) = failSym x exp err
+  scan (Fail exp err) []     = failEof exp err
+  scan (Look f)       xs     = scan (f xs) xs
 
-  scan' e p xs =
-    case scan e p xs of
+  scan' p xs =
+    case scan p xs of
       Left  _    -> []
       Right ress -> ress
 
-completeResults :: ParseMethod s a [a]
-completeResults p xs g e0 = scan e0 p xs
+completeResults :: ParseMethod s a (Maybe s) [a]
+completeResults p xs = scan p xs
  where
-  scan !e (Symbol sym)   (x:xs) = scan (g x e) (sym x) xs
-  scan  e (Symbol _)     []     = scan e (Fail [] []) []
-  scan  e (Result res p) []     = Right (res : scan' e p [])
-  scan  e (Result _ p)   xs     = scan e p xs
-  scan  e (Fail exp err) (x:xs) = failSym e exp err
-  scan  e (Fail exp err) []     = failEof e exp err
-  scan  e (Look f)       xs     = scan e (f xs) xs
+  scan (Symbol sym)   (x:xs) = scan (sym x) xs
+  scan (Symbol _)     []     = scan (Fail [] []) []
+  scan (Result res p) []     = Right (res : scan' p [])
+  scan (Result _ p)   xs     = scan p xs
+  scan (Fail exp err) (x:xs) = failSym x exp err
+  scan (Fail exp err) []     = failEof exp err
+  scan (Look f)       xs     = scan (f xs) xs
 
-  scan' e p xs =
-    case scan e p xs of
+  scan' p xs =
+    case scan p xs of
       Left  _    -> []
       Right ress -> ress
 
 -- with left overs
 
-shortestResultWithLeftover :: ParseMethod s a (a,[s])
-shortestResultWithLeftover p xs g e0 = scan e0 p xs
+shortestResultWithLeftover :: ParseMethod s a (Maybe s) (a,[s])
+shortestResultWithLeftover p xs = scan p xs
  where
-  scan !e (Symbol sym)   (x:xs) = scan (g x e) (sym x) xs
-  scan  e (Symbol _)     []     = scan e (Fail [] []) []
-  scan  e (Result res _) xs     = Right (res,xs)
-  scan  e (Fail exp err) (x:xs) = failSym e exp err
-  scan  e (Fail exp err) []     = failEof e exp err
-  scan  e (Look f)       xs     = scan e (f xs) xs
+  scan (Symbol sym)   (x:xs) = scan (sym x) xs
+  scan (Symbol _)     []     = scan (Fail [] []) []
+  scan (Result res _) xs     = Right (res,xs)
+  scan (Fail exp err) (x:xs) = failSym x exp err
+  scan (Fail exp err) []     = failEof exp err
+  scan (Look f)       xs     = scan (f xs) xs
 
-longestResultWithLeftover :: ParseMethod s a (a,[s])
-longestResultWithLeftover p xs g e0 = scan e0 p Nothing xs
+longestResultWithLeftover :: ParseMethod s a (Maybe s) (a,[s])
+longestResultWithLeftover p xs = scan p Nothing xs
  where
-  scan !e (Symbol sym)   mres         (x:xs) = scan (g x e) (sym x) mres xs
-  scan  e (Symbol _)     mres         []     = scan e (Fail [] []) mres []
-  scan  e (Result res p) _            xs     = scan e p (Just (res,xs)) xs
-  scan  e (Fail exp err) Nothing      (x:xs) = failSym e exp err
-  scan  e (Fail exp err) Nothing      []     = failEof e exp err
-  scan  e (Fail _ _)     (Just resxs) _      = Right resxs
-  scan  e (Look f)       mres         xs     = scan e (f xs) mres xs
+  scan (Symbol sym)   mres         (x:xs) = scan (sym x) mres xs
+  scan (Symbol _)     mres         []     = scan (Fail [] []) mres []
+  scan (Result res p) _            xs     = scan p (Just (res,xs)) xs
+  scan (Fail exp err) Nothing      (x:xs) = failSym x exp err
+  scan (Fail exp err) Nothing      []     = failEof exp err
+  scan (Fail _ _)     (Just resxs) _      = Right resxs
+  scan (Look f)       mres         xs     = scan (f xs) mres xs
 
-longestResultsWithLeftover :: ParseMethod s a ([a],Maybe [s])
-longestResultsWithLeftover p xs g e0 = scan e0 p empty empty xs
+longestResultsWithLeftover :: ParseMethod s a (Maybe s) ([a],Maybe [s])
+longestResultsWithLeftover p xs = scan p empty empty xs
  where
-  scan !e (Symbol sym)   ([],_) old    (x:xs) = scan (g x e) (sym x) empty old xs
-  scan  e (Symbol sym)   new    old    (x:xs) = scan (g x e) (sym x) empty new xs
-  scan  e (Symbol _)     new    old    []     = scan e (Fail [] []) new old []
-  scan  e (Result res p) (as,_) old    xs     = scan e p (res:as,Just xs) empty xs
-  scan  e (Fail exp err) ([],_) ([],_) (x:xs) = failSym e exp err
-  scan  e (Fail exp err) ([],_) ([],_) []     = failEof e exp err
-  scan  e (Fail _ _)     ([],_)  old _        = Right old
-  scan  e (Fail _ _)     new _   _            = Right new
-  scan  e (Look f)       new    old    xs     = scan e (f xs) new old xs
+  scan (Symbol sym)   ([],_) old    (x:xs) = scan (sym x) empty old xs
+  scan (Symbol sym)   new    old    (x:xs) = scan (sym x) empty new xs
+  scan (Symbol _)     new    old    []     = scan (Fail [] []) new old []
+  scan (Result res p) (as,_) old    xs     = scan p (res:as,Just xs) empty xs
+  scan (Fail exp err) ([],_) ([],_) (x:xs) = failSym x exp err
+  scan (Fail exp err) ([],_) ([],_) []     = failEof exp err
+  scan (Fail _ _)     ([],_)  old _        = Right old
+  scan (Fail _ _)     new _   _            = Right new
+  scan (Look f)       new    old    xs     = scan (f xs) new old xs
 
   empty = ([],Nothing)
 
-allResultsWithLeftover :: ParseMethod s a [(a,[s])]
-allResultsWithLeftover p xs g e0  = scan e0 p xs
+allResultsWithLeftover :: ParseMethod s a (Maybe s) [(a,[s])]
+allResultsWithLeftover p xs = scan p xs
  where
-  scan !e (Symbol sym)   (x:xs) = scan (g x e) (sym x) xs
-  scan  e (Symbol _)     []     = scan e (Fail [] []) []
-  scan  e (Result res p) xs     = Right ((res,xs) : scan' e p xs)
-  scan  e (Fail exp err) (x:xs) = failSym e exp err
-  scan  e (Fail exp err) []     = failEof e exp err
-  scan  e (Look f)       xs     = scan e (f xs) xs
+  scan (Symbol sym)   (x:xs) = scan (sym x) xs
+  scan (Symbol _)     []     = scan (Fail [] []) []
+  scan (Result res p) xs     = Right ((res,xs) : scan' p xs)
+  scan (Fail exp err) (x:xs) = failSym x exp err
+  scan (Fail exp err) []     = failEof exp err
+  scan (Look f)       xs     = scan (f xs) xs
 
-  scan' e p xs =
-    case scan e p xs of
+  scan' p xs =
+    case scan p xs of
       Left  _    -> []
       Right ress -> ress
 {-
@@ -496,27 +478,14 @@ completeResultsWithLine p xs = scan p 1 xs
 
   '\n' |> n = n+1
   _    |> n = n
--}
+
 -- failing
+-}
+failSym :: s -> Expect -> Unexpect -> ParseResult (Maybe s) r
+failSym s exp err = Left (Just s, exp, err)
 
-failSym :: e -> Expect -> Unexpect -> ParseResult e r
-failSym e exp err = Left (e, exp, err)
+failEof :: Expect -> Unexpect -> ParseResult (Maybe s) r
+failEof exp err = Left (Nothing, exp, err ++ ["end of file"])
 
-failEof :: e -> Expect -> Unexpect -> ParseResult e r
-failEof e exp err = Left (e, exp, err ++ ["end of file"])
-
--------------
--- Locations
-
-data SourcePos = Loc {sourceName :: !FilePath, sourceLine :: !Int, sourceCol :: !Int}
-
-updLoc '\n' (Loc f l c) = Loc f (l+1) 0
-updLoc '\t' (Loc f l c) = Loc f l ((c+8) .&. complement 7)
-updLoc _    (Loc f l c) = Loc f l (c+1)
-
-initLoc p = Loc p 1 0
-
-
-
-
-
+-------------------------------------------------------------------------
+-- the end.
