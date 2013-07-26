@@ -32,6 +32,7 @@ module Text.ParserCombinators.Parsek
   -- parsing & parse methods
   , ParseMethod   
   , ParseResult   
+  , mapErrR
   , parseFromFile 
   , parse         
 
@@ -79,8 +80,7 @@ infixr 3 <<|>
 newtype Parser s a
   = Parser (forall res. (a -> Expect s -> P s res) -> Expect s -> P s res)
 
--- type P; parsing processes
-
+-- | Parsing processes
 data P s res
   = Symbol (s -> P s res)
   | Look ([s] -> P s res)
@@ -97,7 +97,7 @@ type Expect s = [(String, -- Expect this
                 )]
 
 -------------------------------------------------------------------------
--- instances: Functor, Monad, MonadPlus
+-- instances
 
 instance Functor (Parser s) where
   fmap p (Parser f) =
@@ -139,7 +139,7 @@ _              `plus` q@(Symbol _)   = q
 -------------------------------------------------------------------------
 -- primitive parsers
 
-instance Show s => IsParser (Parser s) where
+instance IsParser (Parser s) where
   type SymbolOf (Parser s) = s
   satisfy pred =
     Parser (\fut exp -> Symbol (\c ->
@@ -158,11 +158,10 @@ instance Show s => IsParser (Parser s) where
         f (\a _ -> fut a exp) -- drop the extra expectation in the future
           ((msg,listToMaybe xs):exp) -- locally have an extra expectation
 
-
 succeeds :: Parser s a -> Parser s (Maybe a)
 succeeds (Parser f) =
-  Parser (\fut exp ->
-    Look (\xs ->
+  Parser $ \fut exp ->
+    Look $ \xs ->
       let sim (Symbol f)     q (x:xs) = sim (f x) (\k -> Symbol (\_ -> q k)) xs
           sim (Look f)       q xs     = sim (f xs) q xs
           sim p@(Result _ _) q xs     = q (cont p)
@@ -174,8 +173,6 @@ succeeds (Parser f) =
           cont (Fail unexp)     = Fail unexp
 
        in sim (f (\a _ -> Result a (Fail [])) exp) id xs
-    )
-  )
 
 -----------------------------------------------------------
 -- parser combinators
@@ -194,6 +191,19 @@ type ParseMethod s a r
 
 type ParseResult s r
   = Either (Err s) r
+
+mapErrR :: (s -> s') -> ParseResult s r -> ParseResult s' r
+mapErrR f (Right x) = Right x
+mapErrR f (Left x) = Left (mapErr f x)
+
+first f (a,b) = (f a,b)
+second f (a,b) = (a, f b)
+
+mapErr :: (a -> b) -> Err a -> Err b
+mapErr f = map (first (mapExpect f))
+
+mapExpect :: (a -> b) -> Expect a -> Expect b
+mapExpect f = map (second (fmap f))
 
 -- parse functions
 
