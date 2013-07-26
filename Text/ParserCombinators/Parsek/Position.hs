@@ -14,31 +14,33 @@
 
 module Text.ParserCombinators.Parsek.Position
   ( module Text.ParserCombinators.Parsek
+  , module Text.ParserCombinators.Class
   , SourcePos(..)
-  , PParser
-  , getPos
+  , Parser
+  , getPosition
   , parse
   ) where
 
-import Text.ParserCombinators.Parsek hiding (parse)
+import Text.ParserCombinators.Class
+import Text.ParserCombinators.Parsek hiding (parse,Parser)
 import qualified Text.ParserCombinators.Parsek as P
 import Data.Bits
 
-newtype PParser a = PP (Parser (Char, SourcePos) a)
+newtype Parser a = PP (P.Parser (Char, SourcePos) a)
   deriving (Alternative, Applicative, Monad, Functor)
 
-instance IsParser PParser where
-  type SymbolOf PParser = Char
+instance IsParser Parser where
+  type SymbolOf Parser = Char
   satisfy p = PP $ fst <$> satisfy (p . fst)
   look = PP $ (map fst) <$> look 
   label (PP p) lab = PP (label p lab)
 
-getPos :: PParser SourcePos
-getPos = PP $ (\l -> case l of
+getPosition :: Parser SourcePos
+getPosition = PP $ (\l -> case l of
                   [] -> EOF 
                   ((_,p):_) -> p) <$> look
 
-parse :: FilePath -> PParser a -> (forall s. ParseMethod s a r) -> String -> ParseResult SourcePos r
+parse :: FilePath -> Parser a -> (forall s. ParseMethod s a r) -> String -> ParseResult SourcePos r
 parse file (PP p) method s = mapErrR snd $ P.parse p method (zip s (scanl updLoc (initLoc file) s))
 
 
