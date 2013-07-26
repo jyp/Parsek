@@ -186,8 +186,7 @@ p <<|> q =
 -------------------------------------------------------------------------
 -- type ParseMethod, ParseResult
 
-type ParseMethod s a r
-  = P s a -> [s] -> ParseResult s r
+type ParseMethod s a r = P s a -> [s] -> ParseResult s r
 
 type ParseResult s r
   = Either (Err s) r

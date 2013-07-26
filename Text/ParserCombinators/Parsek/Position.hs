@@ -22,7 +22,7 @@ module Text.ParserCombinators.Parsek.Position
   ) where
 
 import Text.ParserCombinators.Class
-import Text.ParserCombinators.Parsek hiding (parse,Parser)
+import Text.ParserCombinators.Parsek hiding (parse,parseFromFile,Parser)
 import qualified Text.ParserCombinators.Parsek as P
 import Data.Bits
 
@@ -43,6 +43,8 @@ getPosition = PP $ (\l -> case l of
 parse :: FilePath -> Parser a -> (forall s. ParseMethod s a r) -> String -> ParseResult SourcePos r
 parse file (PP p) method s = mapErrR snd $ P.parse p method (zip s (scanl updLoc (initLoc file) s))
 
+parseFromFile :: Parser a -> (forall s. ParseMethod s a r) -> FilePath -> IO (ParseResult SourcePos r)
+parseFromFile p method file = parse file p method <$> readFile file
 
 -------------
 -- Locations
