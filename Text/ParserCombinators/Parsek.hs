@@ -24,49 +24,10 @@ module Text.ParserCombinators.Parsek
   ( Parser         -- :: * -> * -> *; Functor, Monad, MonadPlus
   , Expect         -- :: *; = [String]
 
-  , IsParser (..)
+  , module Text.ParserCombinators.Class
   -- parsers
   , succeeds       -- :: Parser s a -> Parser s (Maybe a)
-  , string         -- :: (Eq s, Show s) => [s] -> Parser s [s]
-
-  , char           -- :: Eq s => s -> Parser s s
-  , noneOf         -- :: Eq s => [s] -> Parser s s
-  , oneOf          -- :: Eq s => [s] -> Parser s s
-
-  , spaces         -- :: Parser Char ()
-  , space          -- :: Parser Char Char
-  , newline        -- :: Parser Char Char
-  , tab            -- :: Parser Char Char
-  , upper          -- :: Parser Char Char
-  , lower          -- :: Parser Char Char
-  , alphaNum       -- :: Parser Char Char
-  , letter         -- :: Parser Char Char
-  , digit          -- :: Parser Char Char
-  , hexDigit       -- :: Parser Char Char
-  , octDigit       -- :: Parser Char Char
-  , anyChar        -- :: Parser s s
-  , anySymbol      -- :: Parser s s
-  , munch, munch1  -- :: (s -> Bool) -> Parser s [s]
-
-  -- parser combinators
-  , label          -- :: String -> Parser s a -> Parser s a
-  , (<?>)          -- :: Parser s a -> String -> Parser s a
-  , pzero          -- :: Parser s a
   , (<<|>)         -- :: Parser s a -> Parser s a -> Parser s a
-  , choice         -- :: [Parser s a] -> Parser s a
-  , option         -- :: a -> Parser s a -> Parser s a
-  , between        -- :: Parser s open -> Parser s close -> Parser s a -> Parser s a
-  , count          -- :: Int -> Parser s a -> Parser s [a]
-
-  , chainl1        -- :: Parser s a -> Parser s (a -> a -> a) -> Parser s a
-  , chainl         -- :: Parser s a -> Parser s (a -> a -> a) -> a -> Parser s a
-  , chainr1        -- :: Parser s a -> Parser s (a -> a -> a) -> Parser s a
-  , chainr         -- :: Parser s a -> Parser s (a -> a -> a) -> a -> Parser s a
-
-  , skipMany1      -- :: Parser s a -> Parser s ()
-  , skipMany       -- :: Parser s a -> Parser s ()
-  , sepBy1         -- :: Parser s a -> Parser s sep -> Parser s [a]
-  , sepBy          -- :: Parser s a -> Parser s sep -> Parser s [a]
 
   -- parsing & parse methods
   , ParseMethod   
@@ -101,6 +62,7 @@ import Control.Monad
   , guard
   , ap
   )
+import Text.ParserCombinators.Class
 
 import Data.List
   ( union
@@ -109,13 +71,7 @@ import Data.List
 
 import Data.Char
 
-infix  2 <?>
 infixr 3 <<|>
-
-class (Monad p, Applicative p, Alternative p) => IsParser p where
-  type SymbolOf p 
-  satisfy :: (SymbolOf p -> Bool) -> p (SymbolOf p)
-  look :: p [SymbolOf p]
 
 -------------------------------------------------------------------------
 -- type Parser
@@ -132,7 +88,7 @@ data P s res
   | Result res (P s res)
 
 type Err s = [(Expect s, -- we expect this stuff
-               String -- but this failed for this reason
+               String -- but failed for this reason
               )]
 
 -- | An intersection (nesting) of things currently expected
@@ -183,9 +139,6 @@ _              `plus` q@(Symbol _)   = q
 -------------------------------------------------------------------------
 -- primitive parsers
 
-anySymbol :: IsParser p => p (SymbolOf p)
-anySymbol = satisfy (const True)
-
 instance Show s => IsParser (Parser s) where
   type SymbolOf (Parser s) = s
   satisfy pred =
@@ -199,15 +152,11 @@ instance Show s => IsParser (Parser s) where
       Look (\s -> fut s exp)
     )
 
-string :: String -> Parser Char ()
-string s = forM_ s char <?> show s
-
-label :: Parser s a -> String -> Parser s a
-label (Parser f) msg =
-  Parser $ \fut exp ->
-      Look $ \xs -> 
-      f (\a _ -> fut a exp) -- drop the extra expectation in the future
-        ((msg,listToMaybe xs):exp) -- locally have an extra expectation
+  label (Parser f) msg =
+    Parser $ \fut exp ->
+        Look $ \xs -> 
+        f (\a _ -> fut a exp) -- drop the extra expectation in the future
+          ((msg,listToMaybe xs):exp) -- locally have an extra expectation
 
 
 succeeds :: Parser s a -> Parser s (Maybe a)
@@ -228,86 +177,14 @@ succeeds (Parser f) =
     )
   )
 
--- specialized
-
--------------------------------------------------------------------------
--- derived parsers
-
-char c    = satisfy (==c)         <?> show [c]
-noneOf cs = satisfy (\c -> not (c `elem` cs))
-oneOf cs  = satisfy (\c -> c `elem` cs)
-
-spaces    = skipMany space        <?> "white space"
-space     = satisfy (isSpace)     <?> "space"
-newline   = char '\n'             <?> "new-line"
-tab       = char '\t'             <?> "tab"
-upper     = satisfy (isUpper)     <?> "uppercase letter"
-lower     = satisfy (isLower)     <?> "lowercase letter"
-alphaNum  = satisfy (isAlphaNum)  <?> "letter or digit"
-letter    = satisfy (isAlpha)     <?> "letter"
-digit     = satisfy (isDigit)     <?> "digit"
-hexDigit  = satisfy (isHexDigit)  <?> "hexadecimal digit"
-octDigit  = satisfy (isOctDigit)  <?> "octal digit"
-anyChar   :: IsParser p => p (SymbolOf p)
-anyChar   = anySymbol
-
-munch p =
-  do cs <- look
-     scan cs
- where
-  scan (c:cs) | p c = do anySymbol; as <- scan cs; return (c:as)
-  scan _            = do return []
-
-munch1 p =
-  do c  <- satisfy p
-     cs <- munch p
-     return (c:cs)
-
 -----------------------------------------------------------
 -- parser combinators
-
-(<?>) :: Parser s a -> String -> Parser s a
-p <?> s = label p s
-
-pzero :: Parser s a
-pzero = mzero
 
 p <<|> q =
   do ma <- succeeds p
      case ma of
        Nothing -> q
        Just a  -> return a
-
-choice ps = foldr (<|>) mzero ps
-
-option x p = p <|> return x
-
-optional p = (do p; return ()) <|> return ()
-
-between open close p = do open; x <- p; close; return x
-
--- repetition
-
-skipMany1 p = do p; skipMany p
-skipMany  p = let scan = (do p; scan) <|> return () in scan
-
-sepBy  p sep = sepBy1 p sep <|> return []
-sepBy1 p sep = do x <- p; xs <- many (do sep; p); return (x:xs)
-
-count n p = sequence (replicate n p)
-
-chainr p op x = chainr1 p op <|> return x
-chainl p op x = chainl1 p op <|> return x
-
-chainr1 p op = scan
- where
-  scan   = do x <- p; rest x
-  rest x = (do f <- op; y <- scan; return (f x y)) <|> return x
-
-chainl1 p op = scan
- where
-  scan   = do x <- p; rest x
-  rest x = (do f <- op; y <- p; rest (f x y)) <|> return x
 
 -------------------------------------------------------------------------
 -- type ParseMethod, ParseResult
@@ -448,32 +325,3 @@ allResultsWithLeftover p xs = scan p xs
     case scan p xs of
       Left  _    -> []
       Right ress -> ress
-{-
-completeResultsWithLine :: ParseMethod Char a Int [a]
-completeResultsWithLine p xs = scan p 1 xs
- where
-  scan (Symbol sym)   n (x:xs) = let n' = x |> n in n' `seq` scan (sym x) n' xs
-  scan (Symbol _)     n []     = scan (Fail [] ["end of file"]) n []
-  scan (Result res p) n []     = Right (res : scan' p n [])
-  scan (Result _ p)   n xs     = scan p n xs
-  scan (Fail exp err) n xs     = Left (n, exp, err)
-  scan (Look f)       n xs     = scan (f xs) n xs
-
-  scan' p n xs =
-    case scan p n xs of
-      Left  _    -> []
-      Right ress -> ress
-
-  '\n' |> n = n+1
-  _    |> n = n
-
--- failing
-failSym :: s -> Expect -> Unexpect -> ParseResult r
-failSym s exp err = Left (Just s, exp, err)
-
-failEof :: Expect -> Unexpect -> ParseResult r
-failEof exp err = Left (Nothing, exp, err ++ ["end of file"])
--}
-
--------------------------------------------------------------------------
--- the end.
