@@ -41,7 +41,8 @@ anyChar   = anySymbol
 anySymbol :: IsParser p => p (SymbolOf p)
 anySymbol = satisfy (const True)
 
-string s = forM_ s char <?> show s
+string :: (IsParser p, SymbolOf p ~ Char) => String -> p String
+string s = forM s char <?> show s
 
 choice ps = foldr (<|>) mzero ps
 
@@ -72,7 +73,7 @@ chainl1 p op = scan
   scan   = do x <- p; rest x
   rest x = (do f <- op; y <- p; rest (f x y)) <|> return x
 
-
+munch,munch1 :: IsParser m => (SymbolOf m -> Bool) -> m [SymbolOf m]
 munch p =
   do cs <- look
      scan cs

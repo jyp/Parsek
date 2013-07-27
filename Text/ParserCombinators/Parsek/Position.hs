@@ -19,6 +19,7 @@ module Text.ParserCombinators.Parsek.Position
   , Parser
   , getPosition
   , parse
+  , parseFromFile
   ) where
 
 import Text.ParserCombinators.Class
