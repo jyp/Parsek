@@ -29,7 +29,7 @@ import qualified Text.ParserCombinators.Parsek as P
 import Data.Bits
 
 newtype Parser a = PP (P.Parser (Char, SourcePos) a)
-  deriving (Alternative, Applicative, Monad, Functor)
+  deriving (Alternative, Applicative, Monad, Functor, MonadPlus)
 
 instance IsParser Parser where
   type SymbolOf Parser = Char
