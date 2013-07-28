@@ -9,20 +9,23 @@ class (Monad p, Alternative p) => IsParser p where
   type SymbolOf p 
   satisfy :: (SymbolOf p -> Bool) -> p (SymbolOf p)
   look :: p [SymbolOf p]
-  label :: p a -> String -> p a
+  label :: String -> p a -> p a
+  (<<|>) :: p a -> p a -> p a
+  
 
 -------------------------------------------------------------------------
 -- derived parsers
 
 infix  2 <?>
+infixr 3 <<|>
 
-p <?> s = label p s
+p <?> s = label s p
 
 pzero = mzero
 
-char c    = satisfy (==c)         <?> show [c]
-noneOf cs = satisfy (\c -> not (c `elem` cs))
-oneOf cs  = satisfy (\c -> c `elem` cs)
+char c    = satisfy (==c) <?> show [c]
+noneOf cs = satisfy (\c -> not (c `elem` cs)) <?> ("none of " ++ cs) 
+oneOf cs  = satisfy (\c -> c `elem` cs) <?> ("one of " ++ cs) 
 
 spaces    = skipMany space        <?> "white space"
 space     = satisfy (isSpace)     <?> "space"
@@ -52,6 +55,12 @@ between open close p = do open; x <- p; close; return x
 
 -- repetition
 
+manyGreedy p = do 
+  x <- (Just <$> p) <<|> (pure Nothing)
+  case x of
+    Nothing -> return []
+    Just y -> (y:) <$> manyGreedy p
+
 skipMany1 p = do p; skipMany p
 skipMany  p = let scan = (do p; scan) <|> return () in scan
 
@@ -74,15 +83,10 @@ chainl1 p op = scan
   rest x = (do f <- op; y <- p; rest (f x y)) <|> return x
 
 munch,munch1 :: IsParser m => (SymbolOf m -> Bool) -> m [SymbolOf m]
-munch p =
-  do cs <- look
-     scan cs
+munch p = scan =<< look
  where
   scan (c:cs) | p c = do anySymbol; as <- scan cs; return (c:as)
   scan _            = do return []
 
-munch1 p =
-  do c  <- satisfy p
-     cs <- munch p
-     return (c:cs)
+munch1 p = (:) <$> satisfy p <*> munch p
 

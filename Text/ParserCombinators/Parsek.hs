@@ -25,9 +25,6 @@ module Text.ParserCombinators.Parsek
   , Expect         -- :: *; = [String]
 
   , module Text.ParserCombinators.Class
-  -- parsers
-  , succeeds       -- :: Parser s a -> Parser s (Maybe a)
-  , (<<|>)         -- :: Parser s a -> Parser s a -> Parser s a
 
   -- parsing & parse methods
   , ParseMethod   
@@ -65,15 +62,6 @@ import Control.Monad
   )
 import Text.ParserCombinators.Class
 
-import Data.List
-  ( union
-  , intersperse
-  )
-
-import Data.Char
-
-infixr 3 <<|>
-
 -------------------------------------------------------------------------
 -- type Parser
 
@@ -86,6 +74,30 @@ data P s res
   | Look ([s] -> P s res)
   | Fail (Err s)
   | Result res (P s res)
+  | Kill (P s res)
+
+noKill (Symbol fut) = Symbol $ noKill . fut
+noKill (Look fut) = Look $ noKill . fut
+noKill (Fail e) = Fail e
+noKill (Result res p) = Result res (noKill p)
+noKill (Kill p) = p
+
+plus' :: Bool -> P s res -> P s res -> P s res
+plus' hasKiller p0 q0 = plus p0 q0 where
+  noKill' = if hasKiller then noKill else id
+  Kill p         `plus` q              | hasKiller = p
+                                       | otherwise = Kill $ p `plus` noKill q
+  p              `plus` Kill q         | hasKiller = error "plus': Impossible"
+                                       | otherwise = Kill $ noKill p `plus` q
+  Symbol fut1    `plus` Symbol fut2    = Symbol (\s -> fut1 s `plus` fut2 s)
+  Fail err1      `plus` Fail err2      = Fail (err1 ++ err2)
+  p              `plus` Result res q   = Result res (p `plus` q)
+  Result res p   `plus` q              = Result res (p `plus` q)
+  Look fut1      `plus` Look fut2      = Look (\s -> fut1 s `plus` fut2 s)
+  Look fut1      `plus` q              = Look (\s -> fut1 s `plus` q)
+  p              `plus` Look fut2      = Look (\s -> p `plus` fut2 s)
+  p@(Symbol _)   `plus` _              = noKill' p
+  _              `plus` q@(Symbol _)   = q
 
 type Err s = [(Expect s, -- we expect this stuff
                String -- but failed for this reason
@@ -115,7 +127,7 @@ instance MonadPlus (Parser s) where
   mzero = Parser (\_fut exp -> Fail [(exp,"mzero")])
 
   mplus (Parser f) (Parser g) =
-    Parser (\fut exp -> f fut exp `plus` g fut exp)
+    Parser (\fut exp -> plus' False (f fut exp) (g fut exp))
 
 instance Applicative (Parser s) where
   pure = return
@@ -124,20 +136,6 @@ instance Applicative (Parser s) where
 instance Alternative (Parser s) where
   (<|>) = mplus
   empty = mzero
-
-plus :: P s res -> P s res -> P s res
-Symbol fut1    `plus` Symbol fut2    = Symbol (\s -> fut1 s `plus` fut2 s)
-Fail err1      `plus` Fail err2      = Fail (err1 ++ err2)
-p              `plus` Result res q   = Result res (p `plus` q)
-Result res p   `plus` q              = Result res (p `plus` q)
-Look fut1      `plus` Look fut2      = Look (\s -> fut1 s `plus` fut2 s)
-Look fut1      `plus` q              = Look (\s -> fut1 s `plus` q)
-p              `plus` Look fut2      = Look (\s -> p `plus` fut2 s)
-p@(Symbol _)   `plus` _              = p
-_              `plus` q@(Symbol _)   = q
-
--------------------------------------------------------------------------
--- primitive parsers
 
 instance IsParser (Parser s) where
   type SymbolOf (Parser s) = s
@@ -152,36 +150,14 @@ instance IsParser (Parser s) where
       Look (\s -> fut s exp)
     )
 
-  label (Parser f) msg =
+  label msg (Parser f) =
     Parser $ \fut exp ->
         Look $ \xs -> 
         f (\a _ -> fut a exp) -- drop the extra expectation in the future
           ((msg,listToMaybe xs):exp) -- locally have an extra expectation
 
-succeeds :: Parser s a -> Parser s (Maybe a)
-succeeds (Parser f) =
-  Parser $ \fut exp ->
-    Look $ \xs ->
-      let sim (Symbol f)     q (x:xs) = sim (f x) (\k -> Symbol (\_ -> q k)) xs
-          sim (Look f)       q xs     = sim (f xs) q xs
-          sim p@(Result _ _) q xs     = q (cont p)
-          sim _              _ _      = fut Nothing []
 
-          cont (Symbol f)       = Symbol (\x -> cont (f x))
-          cont (Look f)         = Look (\s -> cont (f s))
-          cont (Result a p)     = fut (Just a) [] `plus` cont p
-          cont (Fail unexp)     = Fail unexp
-
-       in sim (f (\a _ -> Result a (Fail [])) exp) id xs
-
------------------------------------------------------------
--- parser combinators
-
-p <<|> q =
-  do ma <- succeeds p
-     case ma of
-       Nothing -> q
-       Just a  -> return a
+  Parser f <<|> Parser g = Parser $ \fut exp -> plus' True (f (\a x -> Kill (fut a x)) exp) (g fut exp)
 
 -------------------------------------------------------------------------
 -- type ParseMethod, ParseResult

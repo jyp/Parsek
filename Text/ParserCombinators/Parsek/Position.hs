@@ -20,6 +20,7 @@ module Text.ParserCombinators.Parsek.Position
   , getPosition
   , parse
   , parseFromFile
+  , maybePosToPos
   ) where
 
 import Text.ParserCombinators.Class
@@ -34,7 +35,8 @@ instance IsParser Parser where
   type SymbolOf Parser = Char
   satisfy p = PP $ fst <$> satisfy (p . fst)
   look = PP $ (map fst) <$> look 
-  label (PP p) lab = PP (label p lab)
+  label lab (PP p) = PP (label lab p)
+  (PP p) <<|> (PP q) = PP (p <<|> q)
 
 getPosition :: Parser SourcePos
 getPosition = PP $ (\l -> case l of
@@ -46,6 +48,8 @@ parse file (PP p) method s = mapErrR snd $ P.parse p method (zip s (scanl updLoc
 
 parseFromFile :: Parser a -> (forall s. ParseMethod s a r) -> FilePath -> IO (ParseResult SourcePos r)
 parseFromFile p method file = parse file p method <$> readFile file
+
+maybePosToPos = maybe EOF id
 
 -------------
 -- Locations
