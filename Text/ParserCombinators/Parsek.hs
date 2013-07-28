@@ -70,17 +70,20 @@ newtype Parser s a
 
 -- | Parsing processes
 data P s res
-  = Symbol (s -> P s res)
+  = Skip Int (P s res) -- ^ skip ahead a number of symbols. At end of file, no effect.
   | Look ([s] -> P s res)
   | Fail (Err s)
   | Result res (P s res)
   | Kill (P s res)
 
-noKill (Symbol fut) = Symbol $ noKill . fut
+noKill (Skip n p) = Skip n (noKill p)
 noKill (Look fut) = Look $ noKill . fut
 noKill (Fail e) = Fail e
 noKill (Result res p) = Result res (noKill p)
 noKill (Kill p) = p
+
+skip 0 = id
+skip n = Skip n 
 
 plus' :: Bool -> P s res -> P s res -> P s res
 plus' hasKiller p0 q0 = plus p0 q0 where
@@ -89,15 +92,16 @@ plus' hasKiller p0 q0 = plus p0 q0 where
                                        | otherwise = Kill $ p `plus` noKill q
   p              `plus` Kill q         | hasKiller = error "plus': Impossible"
                                        | otherwise = Kill $ noKill p `plus` q
-  Symbol fut1    `plus` Symbol fut2    = Symbol (\s -> fut1 s `plus` fut2 s)
+  Skip m p       `plus` Skip n q       | m <= n    = Skip m $ p `plus` skip (n-m) q
+                                       | otherwise = Skip n $ skip (m-n) p `plus` skip n q
   Fail err1      `plus` Fail err2      = Fail (err1 ++ err2)
   p              `plus` Result res q   = Result res (p `plus` q)
   Result res p   `plus` q              = Result res (p `plus` q)
   Look fut1      `plus` Look fut2      = Look (\s -> fut1 s `plus` fut2 s)
   Look fut1      `plus` q              = Look (\s -> fut1 s `plus` q)
   p              `plus` Look fut2      = Look (\s -> p `plus` fut2 s)
-  p@(Symbol _)   `plus` _              = noKill' p
-  _              `plus` q@(Symbol _)   = q
+  p@(Skip _ _)   `plus` _              = noKill' p
+  _              `plus` q@(Skip _ _)   = q
 
 type Err s = [(Expect s, -- we expect this stuff
                String -- but failed for this reason
@@ -140,15 +144,11 @@ instance Alternative (Parser s) where
 instance IsParser (Parser s) where
   type SymbolOf (Parser s) = s
   satisfy pred =
-    Parser (\fut exp -> Symbol (\c ->
-      if pred c
-        then fut c []
-        else Fail [(exp,"satisfy")]
-    ))
-  look =
-    Parser (\fut exp ->
-      Look (\s -> fut s exp)
-    )
+    Parser $ \fut exp -> Look $ \xs -> case xs of
+      (c:_) | pred c -> Skip 1 $ fut c exp
+      _ -> Fail [(exp,"satisfy")]
+    
+  look = Parser $ \fut exp -> Look $ \s -> fut s exp
 
   label msg (Parser f) =
     Parser $ \fut exp ->
@@ -156,8 +156,8 @@ instance IsParser (Parser s) where
         f (\a _ -> fut a exp) -- drop the extra expectation in the future
           ((msg,listToMaybe xs):exp) -- locally have an extra expectation
 
-
-  Parser f <<|> Parser g = Parser $ \fut exp -> plus' True (f (\a x -> Kill (fut a x)) exp) (g fut exp)
+  Parser f <<|> Parser g = Parser $ \fut exp -> 
+    plus' True (f (\a x -> Kill (fut a x)) exp) (g fut exp)
 
 -------------------------------------------------------------------------
 -- type ParseMethod, ParseResult
@@ -190,14 +190,13 @@ parseFromFile p method file =
 parse :: Parser s a -> ParseMethod s a r -> [s] -> ParseResult s r
 parse (Parser f) method xs = method (f (\a exp -> Result a (Fail [])) []) xs
 
-notEndOfFile = [([("Some symbol",Nothing)],"end of file")]
+notEndOfFile = [([("not end of file",Nothing)],"end of file")]
 
 -- parse methods
 shortestResult :: ParseMethod s a a
 shortestResult p xs = scan p xs
  where
-  scan (Symbol sym)   (x:xs) = scan (sym x) xs
-  scan (Symbol _)     []     = scan (Fail notEndOfFile) []
+  scan (Skip n p)     xs     = scan p (drop n xs)
   scan (Result res _) _      = Right res
   scan (Fail err) _          = Left err 
   scan (Look f)       xs     = scan (f xs) xs
@@ -205,8 +204,7 @@ shortestResult p xs = scan p xs
 longestResult :: ParseMethod s a a
 longestResult p xs = scan p Nothing xs
  where
-  scan (Symbol sym)   mres       (x:xs) = scan (sym x) mres xs
-  scan (Symbol _)     mres       []     = scan (Fail notEndOfFile) mres []
+  scan (Skip n p)     mres       xs     = scan p mres (drop n xs)
   scan (Result res p) _          xs     = scan p (Just res) xs
   scan (Fail err)     Nothing    _      = Left err 
   scan (Fail _  )     (Just res) _      = Right res
@@ -215,9 +213,8 @@ longestResult p xs = scan p Nothing xs
 longestResults :: ParseMethod s a [a]
 longestResults p xs = scan p [] [] xs
  where
-  scan (Symbol sym)   []  old (x:xs) = scan (sym x) [] old xs
-  scan (Symbol sym)   new old (x:xs) = scan (sym x) [] new xs
-  scan (Symbol _)     new old []     = scan (Fail notEndOfFile) new old []
+  scan (Skip n p)     []  old xs     = scan p [] old (drop n xs)
+  scan (Skip n p )    new old xs     = scan p [] new (drop n xs)
   scan (Result res p) new old xs     = scan p (res:new) [] xs
   scan (Fail err)     []  []  _      = Left err
   scan (Fail _)       []  old _      = Right old
@@ -227,8 +224,7 @@ longestResults p xs = scan p [] [] xs
 allResultsStaged :: ParseMethod s a [[a]]
 allResultsStaged p xs = Right (scan p [] xs)
  where
-  scan (Symbol sym)   ys (x:xs) = ys : scan (sym x) [] xs
-  scan (Symbol _)     ys []     = [ys]
+  scan (Skip n p)     ys xs     = ys : scan p [] (drop n xs)
   scan (Result res p) ys xs     = scan p (res:ys) xs
   scan (Fail _)       ys _      = [ys]
   scan (Look f)       ys xs     = scan (f xs) ys xs
@@ -236,8 +232,7 @@ allResultsStaged p xs = Right (scan p [] xs)
 allResults :: ParseMethod s a [a]
 allResults p xs = scan p xs
  where
-  scan (Symbol sym)   (x:xs) = scan (sym x) xs
-  scan (Symbol _)     []     = scan (Fail notEndOfFile) []
+  scan (Skip n p)     xs     = scan p (drop n xs)
   scan (Result res p) xs     = Right (res : scan' p xs)
   scan (Fail err)     _      = Left err
   scan (Look f)       xs     = scan (f xs) xs
@@ -250,8 +245,7 @@ allResults p xs = scan p xs
 completeResults :: ParseMethod s a [a]
 completeResults p xs = scan p xs
  where
-  scan (Symbol sym)   (x:xs) = scan (sym x) xs
-  scan (Symbol _)     []     = scan (Fail notEndOfFile) []
+  scan (Skip n p)     xs     = scan p (drop n xs)
   scan (Result res p) []     = Right (res : scan' p [])
   scan (Result _ p)   xs     = scan p xs
   scan (Fail err)     _      = Left err
@@ -267,8 +261,7 @@ completeResults p xs = scan p xs
 shortestResultWithLeftover :: ParseMethod s a (a,[s])
 shortestResultWithLeftover p xs = scan p xs
  where
-  scan (Symbol sym)   (x:xs) = scan (sym x) xs
-  scan (Symbol _)     []     = scan (Fail notEndOfFile) []
+  scan (Skip n p)     xs     = scan p (drop n xs)
   scan (Result res _) xs     = Right (res,xs)
   scan (Fail err)     _      = Left err
   scan (Look f)       xs     = scan (f xs) xs
@@ -276,8 +269,7 @@ shortestResultWithLeftover p xs = scan p xs
 longestResultWithLeftover :: ParseMethod s a (a,[s])
 longestResultWithLeftover p xs = scan p Nothing xs
  where
-  scan (Symbol sym)   mres         (x:xs) = scan (sym x) mres xs
-  scan (Symbol _)     mres         []     = scan (Fail notEndOfFile) mres []
+  scan (Skip n p)     mres         xs     = scan p mres (drop n xs)
   scan (Result res p) _            xs     = scan p (Just (res,xs)) xs
   scan (Fail err)     Nothing      _      = Left err
   scan (Fail _)       (Just resxs) _      = Right resxs
@@ -286,9 +278,8 @@ longestResultWithLeftover p xs = scan p Nothing xs
 longestResultsWithLeftover :: ParseMethod s a ([a],Maybe [s])
 longestResultsWithLeftover p xs = scan p empty empty xs
  where
-  scan (Symbol sym)   ([],_) old    (x:xs) = scan (sym x) empty old xs
-  scan (Symbol sym)   new    old    (x:xs) = scan (sym x) empty new xs
-  scan (Symbol _)     new    old    []     = scan (Fail []) new old []
+  scan (Skip n p)     ([],_) old    xs     = scan p empty old $ drop n xs
+  scan (Skip n p)     new    old    xs     = scan p empty new $ drop n xs
   scan (Result res p) (as,_) old    xs     = scan p (res:as,Just xs) empty xs
   scan (Fail err)     ([],_) ([],_) _      = Left err
   scan (Fail _)       ([],_)  old _        = Right old
@@ -300,8 +291,7 @@ longestResultsWithLeftover p xs = scan p empty empty xs
 allResultsWithLeftover :: ParseMethod s a [(a,[s])]
 allResultsWithLeftover p xs = scan p xs
  where
-  scan (Symbol sym)   (x:xs) = scan (sym x) xs
-  scan (Symbol _)     []     = scan (Fail []) []
+  scan (Skip n p)     xs     = scan p $ drop n xs
   scan (Result res p) xs     = Right ((res,xs) : scan' p xs)
   scan (Fail err)     []     = Left err
   scan (Look f)       xs     = scan (f xs) xs

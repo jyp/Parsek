@@ -55,6 +55,7 @@ maybePosToPos = maybe EOF id
 -- Locations
 
 data SourcePos = Loc {sourceName :: !FilePath, sourceLine :: !Int, sourceCol :: !Int} | EOF
+  deriving (Ord,Eq)
 
 instance Show SourcePos where
    show EOF = "end of file"

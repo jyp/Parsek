@@ -90,3 +90,7 @@ munch p = scan =<< look
 
 munch1 p = (:) <$> satisfy p <*> munch p
 
+endOfFile = label "end of file" $ do 
+  s <- look
+  guard (null s)
+
