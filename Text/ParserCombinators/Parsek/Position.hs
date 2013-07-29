@@ -21,6 +21,7 @@ module Text.ParserCombinators.Parsek.Position
   , parse
   , parseFromFile
   , maybePosToPos
+  , anyChar
   ) where
 
 import Text.ParserCombinators.Class
@@ -37,6 +38,9 @@ instance IsParser Parser where
   look = PP $ (map fst) <$> look 
   label lab (PP p) = PP (label lab p)
   (PP p) <<|> (PP q) = PP (p <<|> q)
+
+anyChar   :: IsParser p => p (SymbolOf p)
+anyChar   = anySymbol
 
 getPosition :: Parser SourcePos
 getPosition = PP $ (\l -> case l of
