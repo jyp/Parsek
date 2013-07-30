@@ -74,17 +74,25 @@ data P s res
   | Look ([s] -> P s res)
   | Fail (Err s)
   | Result res (P s res)
-  | Kill (P s res)
+  | Kill (P s res) -- ^ This is a high priority process trying to kill a low-priority one. See <<|>.
 
+-- | Suppress 1st kill instruction 
+noKill :: P s a -> P s a
 noKill (Skip n p) = Skip n (noKill p)
 noKill (Look fut) = Look $ noKill . fut
 noKill (Fail e) = Fail e
 noKill (Result res p) = Result res (noKill p)
 noKill (Kill p) = p
 
+skip :: Int -> P s a -> P s a
 skip 0 = id
 skip n = Skip n 
 
+-- The boolean indicates how to interpret 'Kill' instructions. If
+-- 'True', the lhs process has a high priority and will kill the rhs
+-- when it reaches its Kill instruction (otherwise it fails). If
+-- 'False', then both processes have the same priority, and 'Kill'
+-- instructions are just propagated.
 plus' :: Bool -> P s res -> P s res -> P s res
 plus' hasKiller p0 q0 = plus p0 q0 where
   noKill' = if hasKiller then noKill else id
@@ -168,7 +176,7 @@ type ParseResult s r
   = Either (Err s) r
 
 mapErrR :: (s -> s') -> ParseResult s r -> ParseResult s' r
-mapErrR f (Right x) = Right x
+mapErrR _ (Right x) = Right x
 mapErrR f (Left x) = Left (mapErr f x)
 
 first f (a,b) = (f a,b)
@@ -188,13 +196,11 @@ parseFromFile p method file =
      return (parse p method s)
 
 parse :: Parser s a -> ParseMethod s a r -> [s] -> ParseResult s r
-parse (Parser f) method xs = method (f (\a exp -> Result a (Fail [])) []) xs
-
-notEndOfFile = [([("not end of file",Nothing)],"end of file")]
+parse (Parser f) method xs = method (f (\a _exp -> Result a (Fail [])) []) xs
 
 -- parse methods
 shortestResult :: ParseMethod s a a
-shortestResult p xs = scan p xs
+shortestResult = scan
  where
   scan (Skip n p)     xs     = scan p (drop n xs)
   scan (Result res _) _      = Right res
@@ -202,7 +208,7 @@ shortestResult p xs = scan p xs
   scan (Look f)       xs     = scan (f xs) xs
 
 longestResult :: ParseMethod s a a
-longestResult p xs = scan p Nothing xs
+longestResult p0 = scan p0 Nothing 
  where
   scan (Skip n p)     mres       xs     = scan p mres (drop n xs)
   scan (Result res p) _          xs     = scan p (Just res) xs
@@ -211,7 +217,7 @@ longestResult p xs = scan p Nothing xs
   scan (Look f)       mres       xs     = scan (f xs) mres xs
 
 longestResults :: ParseMethod s a [a]
-longestResults p xs = scan p [] [] xs
+longestResults p0 = scan p0 [] [] 
  where
   scan (Skip n p)     []  old xs     = scan p [] old (drop n xs)
   scan (Skip n p )    new old xs     = scan p [] new (drop n xs)
@@ -222,7 +228,7 @@ longestResults p xs = scan p [] [] xs
   scan (Look f)       new old xs     = scan (f xs) new old xs
 
 allResultsStaged :: ParseMethod s a [[a]]
-allResultsStaged p xs = Right (scan p [] xs)
+allResultsStaged p0 xs0 = Right (scan p0 [] xs0)
  where
   scan (Skip n p)     ys xs     = ys : scan p [] (drop n xs)
   scan (Result res p) ys xs     = scan p (res:ys) xs
@@ -230,7 +236,7 @@ allResultsStaged p xs = Right (scan p [] xs)
   scan (Look f)       ys xs     = scan (f xs) ys xs
 
 allResults :: ParseMethod s a [a]
-allResults p xs = scan p xs
+allResults = scan
  where
   scan (Skip n p)     xs     = scan p (drop n xs)
   scan (Result res p) xs     = Right (res : scan' p xs)
@@ -243,7 +249,7 @@ allResults p xs = scan p xs
       Right ress -> ress
 
 completeResults :: ParseMethod s a [a]
-completeResults p xs = scan p xs
+completeResults = scan
  where
   scan (Skip n p)     xs     = scan p (drop n xs)
   scan (Result res p) []     = Right (res : scan' p [])
@@ -259,7 +265,7 @@ completeResults p xs = scan p xs
 -- with left overs
 
 shortestResultWithLeftover :: ParseMethod s a (a,[s])
-shortestResultWithLeftover p xs = scan p xs
+shortestResultWithLeftover = scan
  where
   scan (Skip n p)     xs     = scan p (drop n xs)
   scan (Result res _) xs     = Right (res,xs)
@@ -267,7 +273,7 @@ shortestResultWithLeftover p xs = scan p xs
   scan (Look f)       xs     = scan (f xs) xs
 
 longestResultWithLeftover :: ParseMethod s a (a,[s])
-longestResultWithLeftover p xs = scan p Nothing xs
+longestResultWithLeftover p0 = scan p0 Nothing
  where
   scan (Skip n p)     mres         xs     = scan p mres (drop n xs)
   scan (Result res p) _            xs     = scan p (Just (res,xs)) xs
@@ -276,11 +282,11 @@ longestResultWithLeftover p xs = scan p Nothing xs
   scan (Look f)       mres         xs     = scan (f xs) mres xs
 
 longestResultsWithLeftover :: ParseMethod s a ([a],Maybe [s])
-longestResultsWithLeftover p xs = scan p empty empty xs
+longestResultsWithLeftover p0 = scan p0 empty empty
  where
   scan (Skip n p)     ([],_) old    xs     = scan p empty old $ drop n xs
-  scan (Skip n p)     new    old    xs     = scan p empty new $ drop n xs
-  scan (Result res p) (as,_) old    xs     = scan p (res:as,Just xs) empty xs
+  scan (Skip n p)     new    _      xs     = scan p empty new $ drop n xs
+  scan (Result res p) (as,_) _      xs     = scan p (res:as,Just xs) empty xs
   scan (Fail err)     ([],_) ([],_) _      = Left err
   scan (Fail _)       ([],_)  old _        = Right old
   scan (Fail _)       new _   _            = Right new
@@ -289,7 +295,7 @@ longestResultsWithLeftover p xs = scan p empty empty xs
   empty = ([],Nothing)
 
 allResultsWithLeftover :: ParseMethod s a [(a,[s])]
-allResultsWithLeftover p xs = scan p xs
+allResultsWithLeftover = scan
  where
   scan (Skip n p)     xs     = scan p $ drop n xs
   scan (Result res p) xs     = Right ((res,xs) : scan' p xs)

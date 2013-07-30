@@ -6,7 +6,7 @@ description: Koen Claessen's PPP, Modified.
 license:        GPL
 license-file:   LICENSE
 author:         Koen Claessen, Jean-Philippe Bernardy
-'smaintainer:     jeanphilippe.bernardy@gmail.com
+maintainer:     jeanphilippe.bernardy@gmail.com
 Cabal-Version:  >= 1.12
 build-type:     Simple
 
