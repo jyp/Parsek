@@ -8,12 +8,11 @@ import Data.Traversable
 
 -- | Parser class
 class (Monad p, Alternative p) => IsParser p where
-  type SymbolOf p -- ^ Type of symbols processed
+  type SymbolOf p -- Type of symbols processed
   satisfy :: (SymbolOf p -> Bool) -> p (SymbolOf p) -- ^ accept a symbol satisfying a given predicate
   look :: p [SymbolOf p] -- ^ access the stream of symbols from the current point
   label :: String -> p a -> p a -- ^ label the parser
   (<<|>) :: p a -> p a -> p a -- ^ Left-biased choice.
-  
 
 -------------------------------------------------------------------------
 -- derived parsers
