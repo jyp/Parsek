@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, NoMonomorphismRestriction #-}
+{-# LANGUAGE TypeFamilies, NoMonomorphismRestriction, FlexibleContexts #-}
 
 module Text.ParserCombinators.Class where
 import Data.Char
