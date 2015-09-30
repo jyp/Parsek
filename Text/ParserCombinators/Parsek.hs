@@ -11,13 +11,9 @@
 --
 -- This module provides the /Parsek/ library developed by Koen Claessen in his
 -- functional pearl article /Parallel Parsing Processes/, Journal of Functional
--- Programming, 14(6), 741&#150;757, Cambridge University Press, 2004:
+-- Programming, 14(6), 741-757, Cambridge University Press, 2004:
 --
 -- <http://www.cs.chalmers.se/~koen/pubs/entry-jfp04-parser.html>
---
--- <http://www.cs.chalmers.se/Cs/Grundutb/Kurser/afp/>
---
--- <http://www.cs.chalmers.se/Cs/Grundutb/Kurser/afp/code/week3/Parsek.hs>
 
 module Text.ParserCombinators.Parsek
   -- basic parser type
