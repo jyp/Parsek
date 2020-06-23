@@ -1,5 +1,5 @@
 name:           parsek
-version:        1.0.1.2
+version:        1.0.2.0
 category:       Parsing
 synopsis:       Parallel Parsing Processes
 description: Koen Claessen's PPP, Modified.
