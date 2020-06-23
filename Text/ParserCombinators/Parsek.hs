@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, MultiParamTypeClasses, TypeFamilies, FlexibleContexts #-}
+{-# LANGUAGE RankNTypes, MultiParamTypeClasses, TypeFamilies, FlexibleContexts, CPP #-}
 -- |
 --
 -- Module      :  Parsek
@@ -50,6 +50,7 @@ module Text.ParserCombinators.Parsek
 import Prelude hiding (exp,pred)
 import Data.Maybe (listToMaybe)
 import Control.Applicative
+import Control.Monad.Fail as Fail
 import Control.Monad
   ( MonadPlus(..)
   , forM_
@@ -128,8 +129,12 @@ instance Monad (Parser s) where
 
   Parser f >>= k =
     Parser (\fut -> f (\a -> let Parser g = k a in g fut))
+#if !MIN_VERSION_base(4,11,0)
+  -- Monad(fail) was removed in GHC 8.8.1
+  fail = Fail.fail
+#endif
 
-instance MonadFail (Parser s) where
+instance Fail.MonadFail (Parser s) where
   fail s = Parser (\_fut exp -> Fail [(exp,s)])
 
 instance MonadPlus (Parser s) where
