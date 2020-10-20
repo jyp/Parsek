@@ -28,9 +28,10 @@ import Text.ParserCombinators.Class
 import Text.ParserCombinators.Parsek hiding (parse,parseFromFile,Parser)
 import qualified Text.ParserCombinators.Parsek as P
 import Data.Bits
+import Control.Monad.Fail as Fail
 
 newtype Parser a = PP (P.Parser (Char, SourcePos) a)
-  deriving (Alternative, Applicative, Monad, Functor, MonadPlus)
+  deriving (Alternative, Applicative, Monad, Functor, MonadPlus, MonadFail)
 
 instance IsParser Parser where
   type SymbolOf Parser = Char
